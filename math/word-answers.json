@@ -93,5 +93,15 @@
     "variable": "はじめに持っていたお金をx円とする。",
     "equation": "(x−2x/5)−(x−2x/5)/3＝1200",
     "answer": "3000円"
+  },
+  "20": {
+    "variable": "歩いた道のりをxkmとする。",
+    "equation": "2＋1.5x＝20",
+    "answer": "12km"
+  },
+  "21": {
+    "variable": "満水になるまでの時間をx分とする。",
+    "equation": "x/12−x/18＝1",
+    "answer": "36分"
   }
 }
