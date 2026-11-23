@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>聴力チェック</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: clamp(1rem, 6vw, 4rem) 1rem; background: #ecf2f2;
+    color: #182c32; font: 1rem/1.65 system-ui, sans-serif; }
+  main { max-width: 36rem; margin: auto; }
+  h1 { margin: 0; font-size: clamp(2rem, 7vw, 3rem); line-height: 1.2; }
+  p { margin: .6rem 0 1.4rem; }
+  .panel { display: grid; gap: 1.4rem; padding: clamp(1rem, 5vw, 2rem);
+    border: 1px solid #c8d7d7; border-radius: 1.25rem; background: white; }
+  fieldset { margin: 0; padding: 0; border: 0; }
+  legend, .label { font-weight: 700; }
+  .choices { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; margin-top: .45rem; }
+  input { accent-color: #006559; }
+  input[type=range] { width: 100%; margin: .45rem 0 0; min-height: 28px; }
+  .row, .ends { display: flex; justify-content: space-between; gap: .75rem; align-items: baseline; }
+  output { color: #00584c; font-size: 1.4rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+  .ends, .note { color: #465c61; font-size: .9rem; }
+  .note { margin: 0; }
+  button { width: 100%; min-height: 3rem; border: 0; border-radius: .65rem;
+    background: #006559; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+  button[data-playing=true] { background: #263d45; }
+  :focus-visible { outline: 3px solid #034eb6; outline-offset: 3px; }
+  #status { margin: .35rem 0 0; min-height: 1.65em; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>聴力チェック</h1>
+  <p>端末の音量を低くしてから、音を少しずつ上げてください。</p>
+  <div class="panel">
+    <fieldset>
+      <legend>音の種類</legend>
+      <div class="choices">
+        <label><input type="radio" name="sound" value="tone" checked> 正弦波</label>
+        <label><input type="radio" name="sound" value="noise"> ホワイトノイズ</label>
+      </div>
+    </fieldset>
+    <div>
+      <div class="row"><label class="label" for="frequency">周波数</label>
+        <output id="frequencyValue" for="frequency">1,000 Hz</output></div>
+      <input id="frequency" type="range" min="-3" max="4" value="0" step="1">
+      <div class="ends"><span>125 Hz</span><span>16,000 Hz</span></div>
+    </div>
+    <div>
+      <div class="row"><label class="label" for="level">相対音量</label>
+        <output id="levelValue" for="level">−60 dB</output></div>
+      <input id="level" type="range" min="-60" max="-20" value="-60" step="5">
+      <div class="ends"><span>小</span><span>大</span></div>
+    </div>
+    <div>
+      <button id="play" type="button">再生</button>
+      <p id="status" role="status">停止中</p>
+    </div>
+    <p class="note">表示はデジタル出力の相対レベルです。実際の音の大きさは端末やイヤホンによって変わります。聞こえ方を比べるときは同じ機器・音量設定でお試しください。</p>
+  </div>
+</main>
+<script>
+  const frequency = document.querySelector('#frequency');
+  const level = document.querySelector('#level');
+  const frequencyValue = document.querySelector('#frequencyValue');
+  const levelValue = document.querySelector('#levelValue');
+  const play = document.querySelector('#play');
+  const status = document.querySelector('#status');
+  const currentSound = () => document.querySelector('input[name="sound"]:checked').value;
+  const hertz = () => 1000 * 2 ** Number(frequency.value);
+  const amplitude = () => 10 ** (Number(level.value) / 20);
+
+  let context;
+  let gateBuffer;
+  let noiseBuffer;
+  let playback;
+  let startRequest = 0;
+
+  function renderSettings() {
+    const isNoise = currentSound() === 'noise';
+    frequency.disabled = isNoise;
+    frequencyValue.textContent = isNoise ? '全帯域' : hertz().toLocaleString('ja-JP') + ' Hz';
+    levelValue.textContent = level.value.replace('-', '−') + ' dB';
+    frequency.setAttribute('aria-valuetext', hertz() + ' ヘルツ');
+    level.setAttribute('aria-valuetext', level.value + ' デシベル');
+  }
+
+  function makeBuffer(seconds, sample) {
+    const buffer = context.createBuffer(1, Math.round(seconds * context.sampleRate), context.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let index = 0; index < data.length; index++) {
+      data[index] = sample(index / context.sampleRate);
+    }
+    return buffer;
+  }
+
+  function loop(buffer) {
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    return source;
+  }
+
+  function stop() {
+    startRequest += 1;
+    if (playback) {
+      const { source, gate, gain } = playback;
+      const now = context.currentTime;
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setTargetAtTime(0, now, .003);
+      source.stop(now + .02);
+      gate.stop(now + .02);
+      playback = undefined;
+    }
+    play.disabled = false;
+    play.dataset.playing = 'false';
+    play.textContent = '再生';
+    status.textContent = '停止中';
+  }
+
+  async function start() {
+    const request = ++startRequest;
+    play.disabled = true;
+    try {
+      const Audio = window.AudioContext || window.webkitAudioContext;
+      context ??= new Audio();
+      await context.resume();
+      if (request !== startRequest || document.hidden) return;
+
+      const isNoise = currentSound() === 'noise';
+      gateBuffer ??= makeBuffer(1, time => Math.max(0, Math.min(1, time / .005, (.5 - time) / .005)));
+      let source;
+      if (isNoise) {
+        noiseBuffer ??= makeBuffer(4, () => 2 * Math.random() - 1);
+        source = loop(noiseBuffer);
+      } else {
+        source = context.createOscillator();
+        source.type = 'sine';
+        source.frequency.value = hertz();
+      }
+
+      const gate = loop(gateBuffer);
+      const pulse = context.createGain();
+      pulse.gain.value = 0;
+      gate.connect(pulse.gain);
+      const gain = context.createGain();
+      gain.gain.value = amplitude();
+      source.connect(pulse).connect(gain).connect(context.destination);
+      source.onended = () => {
+        source.disconnect();
+        gate.disconnect();
+        pulse.disconnect();
+        gain.disconnect();
+      };
+
+      const begin = context.currentTime + .02;
+      source.start(begin);
+      gate.start(begin);
+      playback = { source, gate, gain };
+      play.dataset.playing = 'true';
+      play.textContent = '停止';
+      status.textContent = '再生中 · 0.5 秒ごとに断続';
+    } catch (error) {
+      if (request === startRequest) status.textContent = '再生できませんでした。';
+    } finally {
+      if (request === startRequest) play.disabled = false;
+    }
+  }
+
+  frequency.addEventListener('input', () => {
+    renderSettings();
+    if (playback) playback.source.frequency.setTargetAtTime(hertz(), context.currentTime, .01);
+  });
+  level.addEventListener('input', () => {
+    renderSettings();
+    if (playback) playback.gain.gain.setTargetAtTime(amplitude(), context.currentTime, .01);
+  });
+  document.querySelectorAll('input[name="sound"]').forEach(input => {
+    input.addEventListener('change', () => {
+      renderSettings();
+      if (playback) {
+        stop();
+        start();
+      }
+    });
+  });
+  play.addEventListener('click', () => playback ? stop() : start());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+  window.addEventListener('pagehide', stop);
+  renderSettings();
+</script>
+</body>
+</html>
