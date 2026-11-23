@@ -72,6 +72,7 @@
   const amplitude = () => 10 ** (Number(level.value) / 20);
 
   let context;
+  const pulseSeconds = 0.25;
   let gateBuffer;
   let noiseBuffer;
   let playback;
@@ -129,7 +130,9 @@
       if (request !== startRequest || document.hidden) return;
 
       const isNoise = currentSound() === 'noise';
-      gateBuffer ??= makeBuffer(1, time => Math.max(0, Math.min(1, time / .005, (.5 - time) / .005)));
+      gateBuffer ??= makeBuffer(2 * pulseSeconds, time =>
+        Math.max(0, Math.min(1, time / .005, (pulseSeconds - time) / .005))
+      );
       let source;
       if (isNoise) {
         noiseBuffer ??= makeBuffer(4, () => 2 * Math.random() - 1);
@@ -160,7 +163,7 @@
       playback = { source, gate, gain };
       play.dataset.playing = 'true';
       play.textContent = '停止';
-      status.textContent = '再生中 · 0.5 秒ごとに断続';
+      status.textContent = `再生中 · ${pulseSeconds} 秒ごとに断続`;
     } catch (error) {
       if (request === startRequest) status.textContent = '再生できませんでした。';
     } finally {
